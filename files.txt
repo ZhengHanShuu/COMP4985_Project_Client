@@ -1,1 +1,1 @@
-main src/client.c
+main src/client.c ncurses

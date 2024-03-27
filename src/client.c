@@ -22,10 +22,14 @@
 #include <string.h>
 #include <unistd.h>
 
+// Ncurses Library
+#include <ncurses.h>
+
 // Macros
 #define UNKNOWN_OPTION_MESSAGE_LEN 24
 #define BASE_TEN 10
 #define LINE_LENGTH 1024
+// #define HISTORY_SIZE 100    // Arbitrary size, you might need to adjust based on the expected usage.
 
 // ----- Function Headers -----
 
@@ -57,6 +61,30 @@ static volatile sig_atomic_t sigtstp_flag = 0;    // NOLINT(cppcoreguidelines-av
 
 // ----- Main Function -----
 
+// char *message_history[HISTORY_SIZE];
+// int   message_history_count = 0;
+//
+//// Initialize history array
+// void init_history()
+//{
+//     for(int i = 0; i < HISTORY_SIZE; i++)
+//     {
+//         message_history[i] = NULL;
+//     }
+// }
+//
+//// Cleanup history on exit
+// void cleanup_history()
+//{
+//     for(int i = 0; i < HISTORY_SIZE; i++)
+//     {
+//         if(message_history[i] != NULL)
+//         {
+//             free(message_history[i]);
+//         }
+//     }
+// }
+
 int main(int argc, char *argv[])
 {
     char     *ip_address;
@@ -78,6 +106,12 @@ int main(int argc, char *argv[])
     parse_arguments(argc, argv, &ip_address, &port_str);
     handle_arguments(argv[0], ip_address, port_str, &port);
     convert_address(ip_address, &addr);
+
+    initscr();               // Initialize the screen
+    cbreak();                // Disable line buffering
+    noecho();                // Don't echo input characters
+    keypad(stdscr, TRUE);    // Enable keyboard mapping
+    // init_history();
 
     sock_fd = socket_create(addr.ss_family, SOCK_STREAM, 0);
 
@@ -127,8 +161,11 @@ int main(int argc, char *argv[])
     pthread_join(write_message_thread, NULL);
     pthread_join(read_message_thread, NULL);
 
+    endwin();    // Restore terminal to previous state
+
     //    socket_close(client_sockfd);
     socket_close(sock_fd);
+    // cleanup_history();
     return EXIT_SUCCESS;
 }
 
@@ -412,44 +449,121 @@ static void sigtstp_handler(int signum)
 
 #pragma GCC diagnostic pop
 
+// Add message to history and display
+// void add_message_to_history(const char *message)
+//{
+//    // Allocate memory for new message and add to history
+//    if(message_history_count < HISTORY_SIZE)
+//    {
+//        message_history[message_history_count++] = strdup(message);
+//    }
+//    else
+//    {
+//        // If history is full, remove the oldest message
+//        free(message_history[0]);
+//        memmove(message_history, message_history + 1, (HISTORY_SIZE - 1) * sizeof(char *));
+//        message_history[HISTORY_SIZE - 1] = strdup(message);
+//    }
+//
+//    // Redraw the chat history
+//    for(int i = 0; i < message_history_count; ++i)
+//    {
+//        mvprintw(i, 0, "%s", message_history[i]);    // Adjust this if you have a header or other content
+//
+//        refresh();
+//    }
+//}
+
+// Display messages in a window with ncurses
+// void display_messages()
+//{
+//    int start_line = LINES - 3 - message_history_count;
+//    for(int i = 0; i < message_history_count; i++)
+//    {
+//        mvprintw(start_line + i, 0, "%s", message_history[i]);
+//    }
+//    refresh();
+//}
+
+// static void *write_message(void *arg)
+//{
+//     int sockfd = *((int *)arg);
+//
+//     while(!sigtstp_flag)
+//     {
+//         char input[LINE_LENGTH];
+//
+//         if(fgets(input, sizeof(input), stdin) != NULL)
+//         {
+//             //            printf("Output: %s\n", input);
+//             write_to_socket(sockfd, input);
+//         }
+//         else
+//         {
+//             sigtstp_flag = 1;
+//             exit(0);
+//         }
+//     }
+//
+//     pthread_exit(NULL);
+// }
+
 static void *write_message(void *arg)
 {
-    int sockfd = *((int *)arg);
+    int  sockfd = *((int *)arg);
+    char input[LINE_LENGTH];
 
     while(!sigtstp_flag)
     {
-        char input[LINE_LENGTH];
+        move(LINES - 1, 0);                      // Move the cursor to the last line of the window.
+        clrtoeol();                              // Clear the line.
+        printw(">Input a message to send: ");    // Print the prompt.
+        refresh();                               // Refresh the screen to show the prompt.
 
-        if(fgets(input, sizeof(input), stdin) != NULL)
-        {
-            //            printf("Output: %s\n", input);
-            write_to_socket(sockfd, input);
-        }
-        else
-        {
-            sigtstp_flag = 1;
-            exit(0);
-        }
+        getnstr(input, sizeof(input) - 1);    // Read input from the user.
+        // The input will be shown due to echo being enabled.
+
+        // Send the input to the socket.
+        write_to_socket(sockfd, input);
+
+        // Prepare for next input
+        move(LINES - 1, 0);
+        clrtoeol();
+        printw(">Input a message to send: ");
+        refresh();
     }
 
     pthread_exit(NULL);
 }
 
+// static void *read_message(void *arg)
+//{
+//     int sockfd = *((int *)arg);
+//
+//     while(!sigtstp_flag)
+//     {
+//         int read_result;
+//         read_result = read_from_socket(sockfd);
+//
+//         if(read_result == 1 || sigtstp_flag == 1)
+//         {
+//             exit(0);
+//         }
+//     }
+//
+//     pthread_exit(NULL);
+// }
+
 static void *read_message(void *arg)
 {
     int sockfd = *((int *)arg);
-
     while(!sigtstp_flag)
     {
-        int read_result;
-        read_result = read_from_socket(sockfd);
-
-        if(read_result == 1 || sigtstp_flag == 1)
+        if(read_from_socket(sockfd) == EXIT_FAILURE || sigtstp_flag == 1)
         {
             exit(0);
         }
     }
-
     pthread_exit(NULL);
 }
 
@@ -466,7 +580,7 @@ static void write_to_socket(int sockfd, const char *message)
     message_len = strlen(message);
     size        = (uint16_t)message_len;
 
-    printf("sockfd: %d\n", sockfd);
+    // printf("sockfd: %d\n", sockfd);
 
     write(sockfd, &version, sizeof(uint8_t));    // Write protocol version
     write(sockfd, &size, sizeof(uint16_t));      // Write the size of the command
@@ -513,6 +627,8 @@ static int read_from_socket(int sockfd)
         return EXIT_FAILURE;
     }
 
+    // add_message_to_history(buffer);
+    // display_messages();    // This function needs to handle ncurses display updates
     fflush(stdout);
 
     return EXIT_SUCCESS;
