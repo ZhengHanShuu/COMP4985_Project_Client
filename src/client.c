@@ -29,7 +29,6 @@
 #define UNKNOWN_OPTION_MESSAGE_LEN 24
 #define BASE_TEN 10
 #define LINE_LENGTH 1024
-// #define HISTORY_SIZE 100    // Arbitrary size, you might need to adjust based on the expected usage.
 
 // ----- Function Headers -----
 
@@ -61,30 +60,6 @@ static volatile sig_atomic_t sigtstp_flag = 0;    // NOLINT(cppcoreguidelines-av
 
 // ----- Main Function -----
 
-// char *message_history[HISTORY_SIZE];
-// int   message_history_count = 0;
-//
-//// Initialize history array
-// void init_history()
-//{
-//     for(int i = 0; i < HISTORY_SIZE; i++)
-//     {
-//         message_history[i] = NULL;
-//     }
-// }
-//
-//// Cleanup history on exit
-// void cleanup_history()
-//{
-//     for(int i = 0; i < HISTORY_SIZE; i++)
-//     {
-//         if(message_history[i] != NULL)
-//         {
-//             free(message_history[i]);
-//         }
-//     }
-// }
-
 int main(int argc, char *argv[])
 {
     char     *ip_address;
@@ -111,7 +86,6 @@ int main(int argc, char *argv[])
     cbreak();                // Disable line buffering
     noecho();                // Don't echo input characters
     keypad(stdscr, TRUE);    // Enable keyboard mapping
-    // init_history();
 
     sock_fd = socket_create(addr.ss_family, SOCK_STREAM, 0);
 
@@ -165,7 +139,6 @@ int main(int argc, char *argv[])
 
     //    socket_close(client_sockfd);
     socket_close(sock_fd);
-    // cleanup_history();
     return EXIT_SUCCESS;
 }
 
@@ -449,42 +422,6 @@ static void sigtstp_handler(int signum)
 
 #pragma GCC diagnostic pop
 
-// Add message to history and display
-// void add_message_to_history(const char *message)
-//{
-//    // Allocate memory for new message and add to history
-//    if(message_history_count < HISTORY_SIZE)
-//    {
-//        message_history[message_history_count++] = strdup(message);
-//    }
-//    else
-//    {
-//        // If history is full, remove the oldest message
-//        free(message_history[0]);
-//        memmove(message_history, message_history + 1, (HISTORY_SIZE - 1) * sizeof(char *));
-//        message_history[HISTORY_SIZE - 1] = strdup(message);
-//    }
-//
-//    // Redraw the chat history
-//    for(int i = 0; i < message_history_count; ++i)
-//    {
-//        mvprintw(i, 0, "%s", message_history[i]);    // Adjust this if you have a header or other content
-//
-//        refresh();
-//    }
-//}
-
-// Display messages in a window with ncurses
-// void display_messages()
-//{
-//    int start_line = LINES - 3 - message_history_count;
-//    for(int i = 0; i < message_history_count; i++)
-//    {
-//        mvprintw(start_line + i, 0, "%s", message_history[i]);
-//    }
-//    refresh();
-//}
-
 // static void *write_message(void *arg)
 //{
 //     int sockfd = *((int *)arg);
@@ -510,29 +447,38 @@ static void sigtstp_handler(int signum)
 
 static void *write_message(void *arg)
 {
-    int  sockfd = *((int *)arg);
-    char input[LINE_LENGTH];
+    int     sockfd    = *((int *)arg);
+    WINDOW *input_win = newwin(2, COLS, LINES - 2, 0);
+    keypad(input_win, TRUE);    // Enable keypad for the window to capture special keys.
+    echo();                     // Enable echoing of input to the window.
 
+    // Main loop for message input and sending.
     while(!sigtstp_flag)
     {
-        move(LINES - 1, 0);                      // Move the cursor to the last line of the window.
-        clrtoeol();                              // Clear the line.
-        printw(">Input a message to send: ");    // Print the prompt.
-        refresh();                               // Refresh the screen to show the prompt.
+        char input[LINE_LENGTH] = {0};                                // Initialize with zeros to clear previous input.
+        werase(input_win);                                            // Clear the window for fresh input.
+        mvwprintw(input_win, 0, 0, "> Input a message to send: ");    // Prompt for input.
+        wrefresh(input_win);                                          // Refresh the window to apply changes.
 
-        getnstr(input, sizeof(input) - 1);    // Read input from the user.
-        // The input will be shown due to echo being enabled.
+        // Get the input from the user with echoing enabled.
+        wgetnstr(input_win, input, LINE_LENGTH - 1);
 
-        // Send the input to the socket.
-        write_to_socket(sockfd, input);
+        // Send the input to the socket if it's not empty.
+        if(strlen(input) > 0)
+        {
+            write_to_socket(sockfd, input);
+        }
 
-        // Prepare for next input
-        move(LINES - 1, 0);
-        clrtoeol();
-        printw(">Input a message to send: ");
-        refresh();
+        // Explicitly clear the input buffer for the next message.
+        memset(input, 0, LINE_LENGTH);
+        // Clear the window for the next input.
+        werase(input_win);
+        wrefresh(input_win);    // Refresh to show the cleared state.
     }
 
+    // Clean up before exit.
+    delwin(input_win);
+    endwin();    // Restore the terminal to its former state.
     pthread_exit(NULL);
 }
 
@@ -578,7 +524,7 @@ static void write_to_socket(int sockfd, const char *message)
     uint8_t  version = 1;
 
     message_len = strlen(message);
-    size        = (uint16_t)message_len;
+    size        = htons((uint16_t)message_len);
 
     // printf("sockfd: %d\n", sockfd);
 
@@ -604,6 +550,7 @@ static int read_from_socket(int sockfd)
 
     read(sockfd, &version, sizeof(uint8_t));
     read(sockfd, &size, sizeof(uint16_t));
+    size       = ntohs(size);
     bytes_read = read(sockfd, buffer, size);
 
     if(bytes_read < 1 && version != 1)    // Check if connection is closed
@@ -627,8 +574,6 @@ static int read_from_socket(int sockfd)
         return EXIT_FAILURE;
     }
 
-    // add_message_to_history(buffer);
-    // display_messages();    // This function needs to handle ncurses display updates
     fflush(stdout);
 
     return EXIT_SUCCESS;
