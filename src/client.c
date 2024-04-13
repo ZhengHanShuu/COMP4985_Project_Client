@@ -22,9 +22,6 @@
 #include <string.h>
 #include <unistd.h>
 
-// Ncurses Library
-#include <ncurses.h>
-
 // Macros
 #define UNKNOWN_OPTION_MESSAGE_LEN 24
 #define BASE_TEN 10
@@ -82,11 +79,6 @@ int main(int argc, char *argv[])
     handle_arguments(argv[0], ip_address, port_str, &port);
     convert_address(ip_address, &addr);
 
-    initscr();               // Initialize the screen
-    cbreak();                // Disable line buffering
-    noecho();                // Don't echo input characters
-    keypad(stdscr, TRUE);    // Enable keyboard mapping
-
     sock_fd = socket_create(addr.ss_family, SOCK_STREAM, 0);
 
     socket_connect(sock_fd, &addr, port);
@@ -112,30 +104,28 @@ int main(int argc, char *argv[])
         return EXIT_FAILURE;
     }
 
-    //    while(!sigtstp_flag)
-    //    {
-    //        sleep(1);
-    //    }
+    while(!sigtstp_flag)
+    {
+        sleep(1);
+    }
 
-    //    write_thread_result = pthread_cancel(write_message_thread);
-    //
-    //    if(write_thread_result != 0)
-    //    {
-    //        fprintf(stderr, "Error cancelling write thread\n");
-    //        exit(EXIT_FAILURE);
-    //    }
-    //
-    //    read_thread_result = pthread_cancel(read_message_thread);
-    //    if(read_thread_result != 0)
-    //    {
-    //        fprintf(stderr, "Error canceling read thread\n");
-    //        exit(EXIT_FAILURE);
-    //    }
+    write_thread_result = pthread_cancel(write_message_thread);
+
+    if(write_thread_result != 0)
+    {
+        fprintf(stderr, "Error cancelling write thread\n");
+        exit(EXIT_FAILURE);
+    }
+
+    read_thread_result = pthread_cancel(read_message_thread);
+    if(read_thread_result != 0)
+    {
+        fprintf(stderr, "Error canceling read thread\n");
+        exit(EXIT_FAILURE);
+    }
 
     pthread_join(write_message_thread, NULL);
     pthread_join(read_message_thread, NULL);
-
-    endwin();    // Restore terminal to previous state
 
     //    socket_close(client_sockfd);
     socket_close(sock_fd);
@@ -383,7 +373,7 @@ static void setup_signal_handler(void)
     struct sigaction sa;
     memset(&sa, 0, sizeof(sa));
 
-// Disable specific clang compiler warning related to macro expansion.
+    // Disable specific clang compiler warning related to macro expansion.
 #if defined(__clang__)
     #pragma clang diagnostic push
     #pragma clang diagnostic ignored "-Wdisabled-macro-expansion"
@@ -392,7 +382,7 @@ static void setup_signal_handler(void)
     // Set the signal handler function for SIGTSTP (Ctrl+Z) to 'sigtstp_handler'.
     sa.sa_handler = sigtstp_handler;
 
-// Restore the previous Clang compiler warning settings.
+    // Restore the previous Clang compiler warning settings.
 #if defined(__clang__)
     #pragma clang diagnostic pop
 #endif
@@ -422,94 +412,44 @@ static void sigtstp_handler(int signum)
 
 #pragma GCC diagnostic pop
 
-// static void *write_message(void *arg)
-//{
-//     int sockfd = *((int *)arg);
-//
-//     while(!sigtstp_flag)
-//     {
-//         char input[LINE_LENGTH];
-//
-//         if(fgets(input, sizeof(input), stdin) != NULL)
-//         {
-//             //            printf("Output: %s\n", input);
-//             write_to_socket(sockfd, input);
-//         }
-//         else
-//         {
-//             sigtstp_flag = 1;
-//             exit(0);
-//         }
-//     }
-//
-//     pthread_exit(NULL);
-// }
-
 static void *write_message(void *arg)
 {
-    int     sockfd    = *((int *)arg);
-    WINDOW *input_win = newwin(2, COLS, LINES - 2, 0);
-    keypad(input_win, TRUE);    // Enable keypad for the window to capture special keys.
-    echo();                     // Enable echoing of input to the window.
+    int sockfd = *((int *)arg);
 
-    // Main loop for message input and sending.
     while(!sigtstp_flag)
     {
-        char input[LINE_LENGTH] = {0};                                // Initialize with zeros to clear previous input.
-        werase(input_win);                                            // Clear the window for fresh input.
-        mvwprintw(input_win, 0, 0, "> Input a message to send: ");    // Prompt for input.
-        wrefresh(input_win);                                          // Refresh the window to apply changes.
+        char input[LINE_LENGTH];
 
-        // Get the input from the user with echoing enabled.
-        wgetnstr(input_win, input, LINE_LENGTH - 1);
-
-        // Send the input to the socket if it's not empty.
-        if(strlen(input) > 0)
+        if(fgets(input, sizeof(input), stdin) != NULL)
         {
+            //            printf("Output: %s\n", input);
             write_to_socket(sockfd, input);
         }
-
-        // Explicitly clear the input buffer for the next message.
-        memset(input, 0, LINE_LENGTH);
-        // Clear the window for the next input.
-        werase(input_win);
-        wrefresh(input_win);    // Refresh to show the cleared state.
+        else
+        {
+            sigtstp_flag = 1;
+            exit(0);
+        }
     }
 
-    // Clean up before exit.
-    delwin(input_win);
-    endwin();    // Restore the terminal to its former state.
     pthread_exit(NULL);
 }
-
-// static void *read_message(void *arg)
-//{
-//     int sockfd = *((int *)arg);
-//
-//     while(!sigtstp_flag)
-//     {
-//         int read_result;
-//         read_result = read_from_socket(sockfd);
-//
-//         if(read_result == 1 || sigtstp_flag == 1)
-//         {
-//             exit(0);
-//         }
-//     }
-//
-//     pthread_exit(NULL);
-// }
 
 static void *read_message(void *arg)
 {
     int sockfd = *((int *)arg);
+
     while(!sigtstp_flag)
     {
-        if(read_from_socket(sockfd) == EXIT_FAILURE || sigtstp_flag == 1)
+        int read_result;
+        read_result = read_from_socket(sockfd);
+
+        if(read_result == 1 || sigtstp_flag == 1)
         {
             exit(0);
         }
     }
+
     pthread_exit(NULL);
 }
 
@@ -523,10 +463,10 @@ static void write_to_socket(int sockfd, const char *message)
     uint16_t size;
     uint8_t  version = 1;
 
-    message_len = strlen(message);
+    message_len = strlen(message) - 1;
     size        = htons((uint16_t)message_len);
 
-    // printf("sockfd: %d\n", sockfd);
+    //    printf("sockfd: %d\n", sockfd);
 
     write(sockfd, &version, sizeof(uint8_t));    // Write protocol version
     write(sockfd, &size, sizeof(uint16_t));      // Write the size of the command
